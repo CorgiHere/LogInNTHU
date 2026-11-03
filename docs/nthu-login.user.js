@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.3.0
+// @version      1.4.0
 // @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
-// @description  在手機上用已存帳密登入清大系統，並辨識驗證碼
+// @description  在手機上填入已存帳密，驗證碼由自己輸入
 // @match        https://corgihere.github.io/LogInNTHU/*
 // @match        https://corgihere.github.io/LogInNTHU/
 // @match        https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/*
@@ -15,12 +15,8 @@
 // @match        https://libsms.lib.nthu.edu.tw/*
 // @grant        GM.setValue
 // @grant        GM.getValue
-// @grant        GM.xmlHttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @grant        GM_xmlhttpRequest
-// @connect      cdn.jsdelivr.net
-// @connect      tessdata.projectnaptha.com
 // @inject-into  content
 // @run-at       document-start
 // ==/UserScript==
@@ -32,35 +28,22 @@
   const JOB = "nthu.job";
   const ALERT = "nthu-alert";
   const EECLASS_OAUTH = "https://oauth.ccxp.nthu.edu.tw/v1.1/authorize.php?response_type=code&client_id=eeclass&redirect_uri=https%3A%2F%2Feeclass.nthu.edu.tw%2Fservice%2Foauth%2F&scope=lmsid+userid&state=&ui_locales=zh-TW";
-  const TESS_JS = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
-  const TESS_WORKER = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js";
-  const TESS_CORE = "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-simd-lstm.wasm.js";
-  const TESS_LANG = "https://tessdata.projectnaptha.com/4.0.0_fast";
 
   const FORMS = {
     ccxp: {
       account: "input[name='account']",
       password: "input[name='passwd']",
       captcha: "input[name='passwd2']",
-      image: "img[src*='auth_img.php']",
-      submit: "input[name='Submit']",
-      length: 6,
     },
     oauth: {
       account: "input[name='id']",
       password: "input[name='password']",
       captcha: "#captcha_code",
-      image: "#captcha_image",
-      submit: "button[name='action'][value='login']",
-      length: 4,
     },
     library: {
       account: "input[name='username']",
       password: "input[name='password']",
       captcha: "#checkNum",
-      image: "#captcha_img",
-      submit: "input[type='submit'][value='登入']",
-      length: 4,
     },
   };
 
@@ -221,126 +204,16 @@
     ]);
   }
 
-  function gmText(url) {
-    const details = { method: "GET", url: url, timeout: 12000, responseType: "text" };
-    if (typeof GM !== "undefined" && GM && typeof GM.xmlHttpRequest === "function") {
-      return Promise.resolve(GM.xmlHttpRequest(details)).then((resp) => (resp && (resp.responseText || resp.response)) || "");
+  function prepareCaptcha(el) {
+    if (!el) return;
+    if (el.type === "number" || el.type === "tel") {
+      el.type = "text";
+      el.setAttribute("inputmode", "numeric");
     }
-    if (typeof GM_xmlhttpRequest === "function") {
-      return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest(Object.assign({}, details, {
-          onload: (resp) => resolve((resp && resp.responseText) || ""),
-          onerror: () => reject(new Error("xhr")),
-          ontimeout: () => reject(new Error("xhr")),
-        }));
-      });
-    }
-    return Promise.reject(new Error("no-xhr"));
-  }
-
-  let workerPromise = null;
-
-  async function worker() {
-    if (!workerPromise) {
-      workerPromise = (async () => {
-        if (!globalThis.Tesseract) {
-          const code = await gmText(TESS_JS);
-          (0, eval)(code);
-        }
-        const engine = globalThis.Tesseract;
-        if (!engine) throw new Error("no-ocr");
-        const created = await engine.createWorker("eng", 1, {
-          workerPath: TESS_WORKER,
-          corePath: TESS_CORE,
-          langPath: TESS_LANG,
-        });
-        await created.setParameters({
-          tessedit_char_whitelist: "0123456789",
-          tessedit_pageseg_mode: "7",
-        });
-        return created;
-      })();
-    }
-    return workerPromise;
-  }
-
-  function drawElement(img, height) {
-    const nw = img.naturalWidth || img.width;
-    const nh = img.naturalHeight || img.height;
-    if (!nw || !nh) return "";
-    const scale = height / nh;
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(nw * scale));
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/png");
-  }
-
-  function captureInPage(img, height) {
-    const token = "nthu" + Math.random().toString(36).slice(2);
-    img.setAttribute("data-nthu-cap", token);
-    const script = document.createElement("script");
-    script.textContent = "(function(){var img=document.querySelector('[data-nthu-cap=\"" + token + "\"]');var box=document.createElement('textarea');box.id='" + token + "';box.setAttribute('aria-hidden','true');box.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px';document.documentElement.appendChild(box);if(!img)return;var nh=img.naturalHeight||img.height,nw=img.naturalWidth||img.width;if(!nh||!nw)return;var s=" + height + "/nh,c=document.createElement('canvas');c.width=Math.max(1,Math.round(nw*s));c.height=" + height + ";var x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);try{box.value=c.toDataURL('image/png')}catch(e){}})();";
-    document.documentElement.appendChild(script);
-    script.remove();
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const tick = () => {
-        const box = document.getElementById(token);
-        if (box && box.value) {
-          const data = box.value;
-          box.remove();
-          img.removeAttribute("data-nthu-cap");
-          resolve(data);
-          return;
-        }
-        if (Date.now() - start > 1200) {
-          if (box) box.remove();
-          img.removeAttribute("data-nthu-cap");
-          resolve("");
-          return;
-        }
-        setTimeout(tick, 40);
-      };
-      tick();
-    });
-  }
-
-  async function capture(img, height) {
-    if (!img.naturalWidth) {
-      await new Promise((resolve) => {
-        const done = () => resolve();
-        img.addEventListener("load", done, { once: true });
-        img.addEventListener("error", done, { once: true });
-        setTimeout(done, 1500);
-      });
-    }
-    const fromPage = await captureInPage(img, height);
-    if (fromPage) return fromPage;
     try {
-      return drawElement(img, height);
-    } catch (err) {
-      return "";
-    }
-  }
-
-  async function readCaptcha(img, length) {
-    const engine = await worker();
-    const votes = [];
-    for (const height of [160, 280]) {
-      const data = await capture(img, height);
-      if (!data) continue;
-      const result = await engine.recognize(data);
-      const digits = ((result && result.data && result.data.text) || "").replace(/\D/g, "");
-      if (digits) votes.push(digits);
-    }
-    const exact = votes.filter((item) => item.length === length);
-    if (!exact.length) return votes[0] || "";
-    exact.sort((a, b) => exact.filter((item) => item === b).length - exact.filter((item) => item === a).length);
-    return exact[0];
+      el.scrollIntoView({ block: "center" });
+    } catch (err) {}
+    el.focus();
   }
 
   async function clickThrough(kind) {
@@ -402,48 +275,8 @@
     }
     setField(qs(form.account), creds.id);
     setField(qs(form.password), creds.secret);
-    if ((job.refreshes || 0) >= 2 || (job.submits || 0) >= 3) {
-      await save(JOB, { until: 0 });
-      captcha.focus();
-      toast("驗證碼請手動輸入後按登入");
-      return;
-    }
-    const img = await waitFor(form.image, 8000);
-    if (!img) {
-      captcha.focus();
-      toast("找不到驗證碼圖片，請手動輸入");
-      return;
-    }
-    toast("正在辨識驗證碼");
-    let code = "";
-    try {
-      code = await withTimeout(readCaptcha(img, form.length), 15000);
-    } catch (err) {
-      await save(JOB, { until: 0 });
-      captcha.focus();
-      toast("請手動輸入驗證碼後按登入");
-      return;
-    }
-    if (code.length !== form.length) {
-      job.refreshes = (job.refreshes || 0) + 1;
-      await save(JOB, job);
-      toast("換一張驗證碼");
-      location.reload();
-      return;
-    }
-    setField(captcha, code, true);
-    await sleep(80);
-    if ((captcha.value || "").replace(/\D/g, "") !== code) {
-      await save(JOB, { until: 0 });
-      captcha.focus();
-      toast("驗證碼沒有寫進欄位，請手動輸入 " + code);
-      return;
-    }
-    job.submits = (job.submits || 0) + 1;
-    await save(JOB, job);
-    toast("第 " + job.submits + " 次登入，驗證碼 " + code);
-    const button = qs(form.submit);
-    if (button) button.click();
+    prepareCaptcha(captcha);
+    toast(failure === "captcha" ? "驗證碼錯誤，請再輸入一次" : "帳號已填好，請輸入驗證碼後按登入");
   }
 
   function bindLauncher() {
