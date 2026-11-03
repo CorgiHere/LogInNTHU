@@ -174,6 +174,9 @@ function refreshHelper() {
 }
 
 fillSetup();
+document.querySelector("#portal-note").textContent = (isIOS || isAndroid)
+  ? "點了之後會打開學校的登入頁，帳號會先填好，驗證碼請自己輸入。"
+  : "點了之後會打開學校的登入頁，由這台電腦辨識驗證碼並登入。";
 
 document.addEventListener("nthu-helper", refreshHelper);
 setTimeout(refreshHelper, 700);
