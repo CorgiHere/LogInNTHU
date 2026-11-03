@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.5.0
+// @version      1.6.0
 // @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @description  手機自己輸入驗證碼，電腦會辨識驗證碼並登入
@@ -501,10 +501,73 @@
     save(CREDS, snapshot()).catch(() => {});
   }
 
+  function hideNode(el) {
+    if (el) el.setAttribute("hidden", "");
+  }
+
+  function armCcxp() {
+    if (!onPhone() || hostKind() !== "ccxp") return;
+    const style = document.createElement("style");
+    style.id = "nthu-ccxp-simple";
+    style.textContent = "html.nthu-ccxp-pending body{visibility:hidden}html.nthu-ccxp-simple,html.nthu-ccxp-simple body{background:#fff!important}html.nthu-ccxp-simple body{visibility:visible;margin:0}html.nthu-ccxp-simple [hidden]{display:none!important}html.nthu-ccxp-simple img[src*='login_top']{width:100%!important;height:auto!important}html.nthu-ccxp-simple form[name='form1']{box-sizing:border-box;padding:4px 20px 32px;max-width:430px}html.nthu-ccxp-simple input.inputtext{display:block;width:100%!important;box-sizing:border-box;font-size:17px!important;margin:8px 0 16px!important;padding:10px 2px}html.nthu-ccxp-simple input.button{min-width:96px;min-height:44px}html.nthu-ccxp-simple img[src*='auth_img']{vertical-align:middle;margin:8px 8px 12px 0}";
+    (document.head || document.documentElement).appendChild(style);
+    document.documentElement.classList.add("nthu-ccxp-pending");
+    setTimeout(() => document.documentElement.classList.remove("nthu-ccxp-pending"), 2000);
+  }
+
+  function simplifyCcxp() {
+    if (!onPhone() || hostKind() !== "ccxp") return;
+    const form = document.querySelector("form[name='form1']");
+    const captcha = form && form.querySelector("input[name='passwd2']");
+    document.documentElement.classList.remove("nthu-ccxp-pending");
+    if (!captcha) {
+      document.documentElement.classList.remove("nthu-ccxp-simple");
+      const viewport = document.querySelector("meta[data-nthu='1']");
+      if (viewport) viewport.remove();
+      return;
+    }
+    document.documentElement.classList.add("nthu-ccxp-simple");
+    if (!document.querySelector("meta[name='viewport']")) {
+      const meta = document.createElement("meta");
+      meta.name = "viewport";
+      meta.content = "width=device-width, initial-scale=1, viewport-fit=cover";
+      meta.setAttribute("data-nthu", "1");
+      (document.head || document.documentElement).appendChild(meta);
+    }
+    for (const child of Array.from(document.body.children)) {
+      if (child.contains(form) || child.id === "nthu-login-toast" || child.tagName === "STYLE" || child.tagName === "SCRIPT") continue;
+      hideNode(child);
+    }
+    const cell = form.closest("td");
+    const row = cell && cell.parentElement;
+    if (row) {
+      for (const td of Array.from(row.children)) {
+        if (td !== cell) hideNode(td);
+      }
+      cell.style.width = "100%";
+    }
+    form.querySelectorAll("a[href*='punch.ccxp'], a[href*='sso.nd.nthu.edu.tw']").forEach(hideNode);
+    hideNode(form.querySelector("table[bordercolor='red']"));
+    const scope = cell || document.body;
+    scope.querySelectorAll("table").forEach((table) => {
+      if (form.contains(table) || table.contains(form)) return;
+      if (table.querySelector("img[src*='login_top']")) return;
+      hideNode(table);
+    });
+    hideNode(scope.querySelector("#twcaseal"));
+    let box = form.parentElement;
+    while (box && box !== document.body) {
+      if (box.style && /login_mid/.test(box.style.backgroundImage || "")) box.style.backgroundImage = "none";
+      box = box.parentElement;
+    }
+  }
+
   if (hostKind() === "ccxp") hookAlert();
+  armCcxp();
 
   ready().then(async () => {
     try {
+      simplifyCcxp();
       if (hostKind() === "launcher") {
         bindLauncher();
         return;
