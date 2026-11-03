@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.2.0
+// @version      1.3.0
 // @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @description  在手機上用已存帳密登入清大系統，並辨識驗證碼
@@ -186,11 +186,30 @@
     return text;
   }
 
-  function setField(el, value) {
+  function setField(el, value, numeric) {
     if (!el) return;
-    el.value = value;
+    const text = String(value);
+    const token = "nthu" + Math.random().toString(36).slice(2);
+    el.setAttribute("data-nthu-field", token);
+    if (numeric && (el.type === "number" || el.type === "tel")) {
+      el.type = "text";
+      el.setAttribute("inputmode", "numeric");
+    }
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+    if (setter && setter.set) setter.set.call(el, text);
+    else el.value = text;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+    const script = document.createElement("script");
+    const literal = JSON.stringify(text).replace(/</g, "\\u003c");
+    script.textContent = "(function(){var el=document.querySelector('[data-nthu-field=\"" + token + "\"]');if(!el)return;" +
+      (numeric ? "if(el.type==='number'||el.type==='tel'){el.type='text';el.setAttribute('inputmode','numeric');}" : "") +
+      "var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');var v=" + literal + ";" +
+      "if(d&&d.set)d.set.call(el,v);else el.value=v;" +
+      "el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));})();";
+    document.documentElement.appendChild(script);
+    script.remove();
+    el.removeAttribute("data-nthu-field");
   }
 
   function withTimeout(promise, ms) {
@@ -200,10 +219,6 @@
         throw new Error("timeout");
       }),
     ]);
-  }
-
-  function imageURL(img) {
-    return new URL(img.getAttribute("src"), location.href).href;
   }
 
   function gmText(url) {
@@ -239,42 +254,93 @@
           corePath: TESS_CORE,
           langPath: TESS_LANG,
         });
-        await created.setParameters({ tessedit_char_whitelist: "0123456789" });
+        await created.setParameters({
+          tessedit_char_whitelist: "0123456789",
+          tessedit_pageseg_mode: "7",
+        });
         return created;
       })();
     }
     return workerPromise;
   }
 
+  function drawElement(img, height) {
+    const nw = img.naturalWidth || img.width;
+    const nh = img.naturalHeight || img.height;
+    if (!nw || !nh) return "";
+    const scale = height / nh;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(nw * scale));
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  }
+
+  function captureInPage(img, height) {
+    const token = "nthu" + Math.random().toString(36).slice(2);
+    img.setAttribute("data-nthu-cap", token);
+    const script = document.createElement("script");
+    script.textContent = "(function(){var img=document.querySelector('[data-nthu-cap=\"" + token + "\"]');var box=document.createElement('textarea');box.id='" + token + "';box.setAttribute('aria-hidden','true');box.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px';document.documentElement.appendChild(box);if(!img)return;var nh=img.naturalHeight||img.height,nw=img.naturalWidth||img.width;if(!nh||!nw)return;var s=" + height + "/nh,c=document.createElement('canvas');c.width=Math.max(1,Math.round(nw*s));c.height=" + height + ";var x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);try{box.value=c.toDataURL('image/png')}catch(e){}})();";
+    document.documentElement.appendChild(script);
+    script.remove();
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const tick = () => {
+        const box = document.getElementById(token);
+        if (box && box.value) {
+          const data = box.value;
+          box.remove();
+          img.removeAttribute("data-nthu-cap");
+          resolve(data);
+          return;
+        }
+        if (Date.now() - start > 1200) {
+          if (box) box.remove();
+          img.removeAttribute("data-nthu-cap");
+          resolve("");
+          return;
+        }
+        setTimeout(tick, 40);
+      };
+      tick();
+    });
+  }
+
+  async function capture(img, height) {
+    if (!img.naturalWidth) {
+      await new Promise((resolve) => {
+        const done = () => resolve();
+        img.addEventListener("load", done, { once: true });
+        img.addEventListener("error", done, { once: true });
+        setTimeout(done, 1500);
+      });
+    }
+    const fromPage = await captureInPage(img, height);
+    if (fromPage) return fromPage;
+    try {
+      return drawElement(img, height);
+    } catch (err) {
+      return "";
+    }
+  }
+
   async function readCaptcha(img, length) {
     const engine = await worker();
-    const src = imageURL(img);
     const votes = [];
-    for (const height of [80, 160]) {
-      const data = await draw(src, height);
+    for (const height of [160, 280]) {
+      const data = await capture(img, height);
+      if (!data) continue;
       const result = await engine.recognize(data);
       const digits = ((result && result.data && result.data.text) || "").replace(/\D/g, "");
       if (digits) votes.push(digits);
-      if (digits.length === length) return digits;
     }
     const exact = votes.filter((item) => item.length === length);
-    return (exact[0] || votes[0] || "");
-  }
-
-  function draw(src, height) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const scale = height / img.naturalHeight;
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/png"));
-      };
-      img.onerror = () => reject(new Error("image"));
-      img.src = src;
-    });
+    if (!exact.length) return votes[0] || "";
+    exact.sort((a, b) => exact.filter((item) => item === b).length - exact.filter((item) => item === a).length);
+    return exact[0];
   }
 
   async function clickThrough(kind) {
@@ -351,7 +417,7 @@
     toast("正在辨識驗證碼");
     let code = "";
     try {
-      code = await withTimeout(readCaptcha(img, form.length), 8000);
+      code = await withTimeout(readCaptcha(img, form.length), 15000);
     } catch (err) {
       await save(JOB, { until: 0 });
       captcha.focus();
@@ -365,7 +431,14 @@
       location.reload();
       return;
     }
-    setField(captcha, code);
+    setField(captcha, code, true);
+    await sleep(80);
+    if ((captcha.value || "").replace(/\D/g, "") !== code) {
+      await save(JOB, { until: 0 });
+      captcha.focus();
+      toast("驗證碼沒有寫進欄位，請手動輸入 " + code);
+      return;
+    }
     job.submits = (job.submits || 0) + 1;
     await save(JOB, job);
     toast("第 " + job.submits + " 次登入，驗證碼 " + code);
