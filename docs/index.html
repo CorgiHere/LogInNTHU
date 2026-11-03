@@ -18,15 +18,10 @@
 
     <main>
       <section id="setup" hidden>
-      <h2 class="group-label">在這支手機上使用</h2>
-      <div class="group setup">
-        <p class="step"><span>1</span>到 App Store 安裝免費的 Userscripts</p>
-        <p class="step"><span>2</span>到「設定 → Safari → 擴充功能」打開 Userscripts，並允許所有網站</p>
-        <a class="step" href="https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js"><span>3</span>安裝登入輔助。打開後點位址列的擴充圖示，再按安裝</a>
-        <p class="step"><span>4</span>回到這頁按「設定」填帳號，再點要進去的系統</p>
-      </div>
+      <h2 class="group-label" id="setup-title">在 Chrome 使用</h2>
+      <div class="group setup" id="setup-steps"></div>
       </section>
-      <p id="helper-state" class="footnote" hidden>登入輔助已啟用。帳密只留在這支手機的 Safari。</p>
+      <p id="helper-state" class="footnote" hidden>登入輔助已啟用。帳密只留在這個瀏覽器。</p>
 
       <div id="settings-panel" hidden>
         <h2 class="group-label" id="school-title">校務帳號 <span id="saved-school" class="saved">尚未儲存</span></h2>
