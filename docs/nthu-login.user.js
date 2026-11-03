@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.1.0
+// @version      1.2.0
 // @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @description  在手機上用已存帳密登入清大系統，並辨識驗證碼
@@ -13,11 +13,15 @@
 // @match        https://eeclass.nthu.edu.tw/*
 // @match        https://idm.nthu.ust.edu.tw/*
 // @match        https://libsms.lib.nthu.edu.tw/*
+// @grant        GM.setValue
+// @grant        GM.getValue
+// @grant        GM.xmlHttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @connect      cdn.jsdelivr.net
 // @connect      tessdata.projectnaptha.com
+// @inject-into  content
 // @run-at       document-start
 // ==/UserScript==
 
@@ -61,16 +65,37 @@
   };
 
   function save(key, value) {
-    const result = GM_setValue(key, JSON.stringify(value));
-    return Promise.resolve(result);
+    try {
+      if (typeof GM !== "undefined" && GM && typeof GM.setValue === "function") {
+        return Promise.resolve(GM.setValue(key, value));
+      }
+      if (typeof GM_setValue === "function") {
+        return Promise.resolve(GM_setValue(key, value));
+      }
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    return Promise.reject(new Error("no-storage"));
   }
 
   async function load(key) {
-    let raw = GM_getValue(key, "");
-    if (raw && typeof raw.then === "function") raw = await raw;
-    if (!raw || typeof raw !== "string") return null;
     try {
-      return JSON.parse(raw);
+      let raw = null;
+      if (typeof GM !== "undefined" && GM && typeof GM.getValue === "function") {
+        raw = await GM.getValue(key, null);
+      } else if (typeof GM_getValue === "function") {
+        raw = GM_getValue(key, null);
+        if (raw && typeof raw.then === "function") raw = await raw;
+      }
+      if (typeof raw === "string") {
+        try {
+          return JSON.parse(raw);
+        } catch (err) {
+          return null;
+        }
+      }
+      if (!raw || typeof raw !== "object") return null;
+      return raw;
     } catch (err) {
       return null;
     }
@@ -182,18 +207,20 @@
   }
 
   function gmText(url) {
-    return new Promise((resolve, reject) => {
-      if (typeof GM_xmlhttpRequest !== "function") {
-        reject(new Error("no-xhr"));
-        return;
-      }
-      GM_xmlhttpRequest({
-        method: "GET",
-        url: url,
-        onload: (resp) => resolve(resp.responseText || ""),
-        onerror: () => reject(new Error("xhr")),
+    const details = { method: "GET", url: url, timeout: 12000, responseType: "text" };
+    if (typeof GM !== "undefined" && GM && typeof GM.xmlHttpRequest === "function") {
+      return Promise.resolve(GM.xmlHttpRequest(details)).then((resp) => (resp && (resp.responseText || resp.response)) || "");
+    }
+    if (typeof GM_xmlhttpRequest === "function") {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest(Object.assign({}, details, {
+          onload: (resp) => resolve((resp && resp.responseText) || ""),
+          onerror: () => reject(new Error("xhr")),
+          ontimeout: () => reject(new Error("xhr")),
+        }));
       });
-    });
+    }
+    return Promise.reject(new Error("no-xhr"));
   }
 
   let workerPromise = null;
@@ -355,7 +382,7 @@
       libraryAccount: ((qs("#library-account") && qs("#library-account").value) || "").trim(),
       libraryPassword: (qs("#library-password") && qs("#library-password").value) || "",
     });
-    document.addEventListener("input", () => { save(CREDS, snapshot()); }, true);
+    document.addEventListener("input", () => { save(CREDS, snapshot()).catch(() => {}); }, true);
     document.addEventListener("click", (event) => {
       const link = event.target.closest && event.target.closest("a[data-portal]");
       if (!link || !link.href) return;
@@ -364,18 +391,18 @@
       const picked = credsFor(portal, creds);
       if (!picked.id || !picked.secret) return;
       event.preventDefault();
-      event.stopPropagation();
       const href = link.href;
-      Promise.all([
+      toast("正在前往…");
+      withTimeout(Promise.all([
         save(CREDS, creds),
         save(JOB, { portal: portal, until: Date.now() + 120000, submits: 0, refreshes: 0 }),
-      ]).then(() => sleep(500)).then(() => {
+      ]), 4000).then(() => sleep(200)).then(() => {
         location.assign(href);
       }).catch(() => {
-        location.assign(href);
+        toast("帳號沒有存好，請再點一次");
       });
     }, true);
-    save(CREDS, snapshot());
+    save(CREDS, snapshot()).catch(() => {});
   }
 
   if (hostKind() === "ccxp") hookAlert();
@@ -395,6 +422,10 @@
       }
       await signIn(job);
     } catch (err) {
+      if (hostKind() === "launcher") {
+        toast("登入輔助沒有啟動完成，請重新安裝");
+        return;
+      }
       toast("請手動輸入驗證碼後按登入");
     }
   });
