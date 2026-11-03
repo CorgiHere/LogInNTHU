@@ -10,6 +10,13 @@ const status = document.querySelector("#status");
 const log = document.querySelector("#log");
 const portals = [...document.querySelectorAll(".portal")];
 
+const ENTRIES = {
+  ccxp: "https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/",
+  elearn: "https://elearn.nthu.edu.tw/auth/oauth2/login.php?id=5&wantsurl=/",
+  eeclass: "https://oauth.ccxp.nthu.edu.tw/v1.1/authorize.php?response_type=code&client_id=eeclass&redirect_uri=https%3A%2F%2Feeclass.nthu.edu.tw%2Fservice%2Foauth%2F&scope=lmsid+userid&state=&ui_locales=zh-TW",
+  library: "https://idm.nthu.ust.edu.tw/sso/886UST_NTHU/oidc/login/?next=/openid/886UST_NTHU/authorize/%3Fclient_id%3D227897%26response_type%3Dcode%26redirect_uri%3Dhttps%3A//libsms.lib.nthu.edu.tw/openidcallback.aspx%26state%3DRWD%26scope%3Dopenid",
+};
+
 const KEY_ID = "nthu.account";
 const KEY_PW = "nthu.password";
 const KEY_LIB_ID = "nthu.library.account";
@@ -102,7 +109,7 @@ async function poll(id) {
   const started = Date.now();
   for (;;) {
     if (Date.now() - started > 180000) {
-      setStatus("等太久了。若 Chrome 已經打開，可以直接在那個視窗完成登入。", "warn");
+      setStatus("等太久了。請看這個頁面。", "warn");
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -115,7 +122,7 @@ async function poll(id) {
     const job = data.job;
     setLog(job.log);
     if (job.status === "success") {
-      setStatus(job.message + "。請改用剛開啟的 Chrome 視窗。", "ok");
+      setStatus(job.message + "。", "ok");
       return;
     }
     if (job.status === "needs_user") {
@@ -142,29 +149,24 @@ for (const button of portals) {
       (library ? libraryAccount : account).focus();
       return;
     }
-    setBusy(true);
-    setLog([]);
-    setStatus("正在打開登入頁…");
+    if (document.documentElement.dataset.nthuHelper !== "1.8.1") {
+      setStatus("請在接下來的頁面按安裝或更新。完成後回到上一頁，再點一次。", "warn");
+      location.assign("/nthu-login.user.js");
+      return;
+    }
+    setStatus("正在前往登入頁…");
     try {
-      const res = await fetch("/api/login", {
+      await fetch("/api/handoff", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           portal: button.dataset.portal,
-          account: id,
-          password: secret,
+          account: account.value.trim(),
+          password: password.value,
+          libraryAccount: libraryAccount.value.trim(),
+          libraryPassword: libraryPassword.value,
         }),
       });
-      const data = await res.json();
-      if (!data.ok) {
-        setStatus(data.error || "無法開始登入", "bad");
-        return;
-      }
-      await poll(data.id);
-    } catch (err) {
-      setStatus("連不到本機程式，請確認視窗裡的程式還開著。", "bad");
-    } finally {
-      setBusy(false);
-    }
+    } catch (err) {}
   });
 }

@@ -1,4 +1,5 @@
 .browser-profile/
+.browser-profile-brave/
 __pycache__/
 *.pyc
 _probe/

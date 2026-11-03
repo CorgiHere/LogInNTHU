@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.7.0
+// @version      1.8.1
 // @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @description  手機自己輸入驗證碼，電腦會辨識驗證碼並登入
+// @match        http://127.0.0.1:8756/*
+// @match        http://localhost:8756/*
 // @match        https://corgihere.github.io/LogInNTHU/*
 // @match        https://corgihere.github.io/LogInNTHU/
 // @match        https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/*
@@ -33,6 +35,12 @@
   const JOB = "nthu.job";
   const ALERT = "nthu-alert";
   const EECLASS_OAUTH = "https://oauth.ccxp.nthu.edu.tw/v1.1/authorize.php?response_type=code&client_id=eeclass&redirect_uri=https%3A%2F%2Feeclass.nthu.edu.tw%2Fservice%2Foauth%2F&scope=lmsid+userid&state=&ui_locales=zh-TW";
+  const ENTRIES = {
+    ccxp: "https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/",
+    elearn: "https://elearn.nthu.edu.tw/auth/oauth2/login.php?id=5&wantsurl=/",
+    eeclass: EECLASS_OAUTH,
+    library: "https://idm.nthu.ust.edu.tw/sso/886UST_NTHU/oidc/login/?next=/openid/886UST_NTHU/authorize/%3Fclient_id%3D227897%26response_type%3Dcode%26redirect_uri%3Dhttps%3A//libsms.lib.nthu.edu.tw/openidcallback.aspx%26state%3DRWD%26scope%3Dopenid",
+  };
   const TESS_JS = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
   const TESS_WORKER = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js";
   const TESS_CORE = "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-simd-lstm.wasm.js";
@@ -110,6 +118,7 @@
     if (host === "eeclass.nthu.edu.tw") return "eeclass";
     if (host === "idm.nthu.ust.edu.tw") return "library";
     if (host === "libsms.lib.nthu.edu.tw") return "library-done";
+    if ((host === "127.0.0.1" || host === "localhost") && location.port === "8756") return "launcher";
     if (host === "corgihere.github.io" && location.pathname.indexOf("/LogInNTHU") === 0) return "launcher";
     return "";
   }
@@ -156,6 +165,7 @@
   }
 
   function toast(text) {
+    if (hostKind() !== "launcher") return;
     let bar = document.getElementById("nthu-login-toast");
     if (!bar) {
       bar = document.createElement("div");
@@ -504,8 +514,28 @@
     if (button) button.click();
   }
 
+  async function takeHandoff() {
+    try {
+      const text = await gmText("http://127.0.0.1:8756/api/handoff");
+      const data = JSON.parse(text || "");
+      if (!data || !data.ok || !data.job || !data.job.portal) return null;
+      const job = data.job;
+      await save(CREDS, {
+        account: job.account || "",
+        password: job.password || "",
+        libraryAccount: job.libraryAccount || "",
+        libraryPassword: job.libraryPassword || "",
+      });
+      const saved = { portal: job.portal, until: Date.now() + 120000, submits: 0, refreshes: 0 };
+      await save(JOB, saved);
+      return saved;
+    } catch (err) {
+      return null;
+    }
+  }
+
   function bindLauncher() {
-    document.documentElement.dataset.nthuHelper = "1";
+    document.documentElement.dataset.nthuHelper = "1.8.1";
     document.dispatchEvent(new Event("nthu-helper"));
     const snapshot = () => ({
       account: ((qs("#account") && qs("#account").value) || "").trim(),
@@ -515,14 +545,15 @@
     });
     document.addEventListener("input", () => { save(CREDS, snapshot()).catch(() => {}); }, true);
     document.addEventListener("click", (event) => {
-      const link = event.target.closest && event.target.closest("a[data-portal]");
-      if (!link || !link.href) return;
+      const link = event.target.closest && event.target.closest("[data-portal]");
+      if (!link) return;
       const portal = link.dataset.portal;
+      const href = link.href || ENTRIES[portal];
+      if (!href) return;
       const creds = snapshot();
       const picked = credsFor(portal, creds);
       if (!picked.id || !picked.secret) return;
       event.preventDefault();
-      const href = link.href;
       toast("正在前往…");
       withTimeout(Promise.all([
         save(CREDS, creds),
@@ -597,6 +628,7 @@
     }
   }
 
+  if (hostKind() === "launcher") document.documentElement.dataset.nthuHelper = "1.8.1";
   if (hostKind() === "ccxp") hookAlert();
   armCcxp();
 
@@ -607,9 +639,11 @@
         bindLauncher();
         return;
       }
-      const job = await load(JOB);
+      let job = await load(JOB);
+      if (!job || !job.until || job.until < Date.now()) job = await takeHandoff();
       if (!job || !job.until || job.until < Date.now()) {
-        if ((document.referrer || "").indexOf("corgihere.github.io") !== -1) {
+        const ref = document.referrer || "";
+        if (ref.indexOf("corgihere.github.io") !== -1 || ref.indexOf(":8756") !== -1) {
           toast("沒有讀到已存帳號，請回清大入口再點一次");
         }
         return;

@@ -3,8 +3,10 @@
 
 import base64
 import json
+import os
 import sys
 import threading
+import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,6 +23,8 @@ PORT = 8756
 _jobs = {}
 _jobs_lock = threading.Lock()
 _queue = None
+_handoff = None
+_handoff_lock = threading.Lock()
 
 
 class Worker(threading.Thread):
@@ -93,6 +97,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if path == "/api/handoff":
+            self._send(200, {"ok": True, "job": _current_handoff()})
+            return
+        if path == "/nthu-login.user.js":
+            file_path = ROOT / "docs" / "nthu-login.user.js"
+            self._send(200, body=file_path.read_bytes(), content_type="text/javascript; charset=utf-8")
+            return
         if path.startswith("/api/jobs/"):
             job_id = path.split("/")[-1]
             with _jobs_lock:
@@ -154,6 +165,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/handoff":
+            _save_handoff_from(self)
+            return
         if path == "/api/ocr":
             self._ocr()
             return
@@ -184,19 +198,73 @@ class Handler(BaseHTTPRequestHandler):
             self._send(409, {"ok": False, "error": "上一個登入還在進行，請稍候"})
             return
 
-        job_id = uuid.uuid4().hex
-        name = bot.PORTALS[portal_id]["name"]
-        job = {
-            "id": job_id,
+        self._send(200, {
+            "ok": True,
+            "url": {
+                "ccxp": "https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/",
+                "elearn": "https://elearn.nthu.edu.tw/auth/oauth2/login.php?id=5&wantsurl=/",
+                "eeclass": bot.EECLASS_OAUTH,
+                "library": bot.LIBRARY_URL,
+            }.get(portal_id),
+        })
+
+
+def _current_handoff():
+    with _handoff_lock:
+        job = _handoff
+    if not job or job["until"] < time.time():
+        return None
+    return {
+        "portal": job["portal"],
+        "account": job["account"],
+        "password": job["password"],
+        "libraryAccount": job["libraryAccount"],
+        "libraryPassword": job["libraryPassword"],
+    }
+
+
+def _save_handoff_from(handler):
+    if not handler._origin_ok():
+        handler._send(403, {"ok": False, "error": "只接受這個網站自己送出的登入"})
+        return
+    data = handler._json(10000)
+    if not isinstance(data, dict):
+        handler._send(400, {"ok": False, "error": "資料不正確"})
+        return
+    portal_id = data.get("portal")
+    if portal_id not in bot.PORTALS:
+        handler._send(400, {"ok": False, "error": "沒有這個系統"})
+        return
+    account = str(data.get("account") or "")
+    password = str(data.get("password") or "")
+    library_account = str(data.get("libraryAccount") or "")
+    library_password = str(data.get("libraryPassword") or "")
+    picked_id = library_account if portal_id == "library" else account
+    picked_secret = library_password if portal_id == "library" else password
+    if not picked_id.strip() or not picked_secret:
+        handler._send(400, {"ok": False, "error": "請先填寫帳號和密碼"})
+        return
+    if max(len(account), len(library_account)) > 42 or max(len(password), len(library_password)) > 64:
+        handler._send(400, {"ok": False, "error": "帳號或密碼長度過長"})
+        return
+    global _handoff
+    with _handoff_lock:
+        _handoff = {
             "portal": portal_id,
-            "status": "queued",
-            "message": f"準備進入{name}",
-            "log": [f"準備進入{name}"],
+            "account": account.strip(),
+            "password": password,
+            "libraryAccount": library_account.strip(),
+            "libraryPassword": library_password,
+            "until": time.time() + 180,
         }
-        with _jobs_lock:
-            _jobs[job_id] = job
-        _queue.put((job_id, portal_id, account, password))
-        self._send(200, {"ok": True, "id": job_id})
+    handler._send(200, {"ok": True})
+
+
+def _open_portal(url):
+    try:
+        bot.open_tab(url)
+    except Exception:
+        webbrowser.open(url)
 
 
 def serve():
@@ -211,7 +279,8 @@ def serve():
     url = f"http://{HOST}:{PORT}/"
     print(f"清大入口已開啟 {url}", flush=True)
     print("帳號密碼只留在瀏覽器裡。關閉這個視窗就會停止程式。", flush=True)
-    threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    if os.environ.get("NTHU_NO_BROWSER") != "1":
+        threading.Timer(0.6, lambda: _open_portal(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

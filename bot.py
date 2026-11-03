@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Open a real Chrome window and sign in to the user's own NTHU portals."""
+"""Open a tab in the user's Brave and sign in to the user's own NTHU portals."""
 
 import io
+import os
+import subprocess
 import time
-from collections import Counter
+import urllib.request
 from pathlib import Path
 
 import ddddocr
@@ -12,7 +14,45 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
-PROFILE_DIR = ROOT / ".browser-profile"
+PROFILE_DIR = ROOT / ".browser-profile-brave"
+DEBUG_PORT = 9222
+
+
+def browser_executable() -> Path:
+    candidates = [
+        Path(os.environ.get("PROGRAMFILES", "")) / "BraveSoftware/Brave-Browser/Application/brave.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "BraveSoftware/Brave-Browser/Application/brave.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "BraveSoftware/Brave-Browser/Application/brave.exe",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError("找不到 Brave")
+
+
+def open_tab(url: str):
+    """Hand the address to the Brave that is already open, so it becomes a tab."""
+    subprocess.Popen(
+        [str(browser_executable()), "--profile-directory=Default", url],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
+def _debugging_ready() -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{DEBUG_PORT}/json/version", timeout=1) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def ensure_brave_tab_host():
+    """Never close Brave or start another window. Attach only when it is already possible."""
+    if _debugging_ready():
+        return
+    raise RuntimeError("不會關閉目前的 Brave，也不會另開視窗")
 
 CCXP_URL = "https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/"
 ELEARN_URL = "https://elearn.nthu.edu.tw/"
@@ -35,15 +75,12 @@ _ENGINES = None
 
 
 def engines():
+    """The newer captcha model. The older one was voting it down on these digit images."""
     global _ENGINES
     if _ENGINES is None:
-        loaded = [
-            ddddocr.DdddOcr(show_ad=False),
-            ddddocr.DdddOcr(show_ad=False, beta=True),
-        ]
-        for engine in loaded:
-            engine.set_ranges("0123456789")
-        _ENGINES = loaded
+        engine = ddddocr.DdddOcr(show_ad=False, beta=True)
+        engine.set_ranges("0123456789")
+        _ENGINES = engine
     return _ENGINES
 
 
@@ -56,32 +93,78 @@ def _resample(raw: bytes, height: int) -> bytes:
     return buf.getvalue()
 
 
+def _digits_from_probability(result) -> tuple:
+    """Pick the most likely digit at each step, instead of dropping a letter lookalike."""
+    if not isinstance(result, dict):
+        digits = "".join(ch for ch in str(result) if ch.isdigit())
+        return digits, 0.0
+    charset = result.get("charset") or result.get("charsets") or []
+    probs = result.get("probabilities") or result.get("probability")
+    if not charset or not probs:
+        digits = "".join(ch for ch in str(result.get("text") or "") if ch.isdigit())
+        return digits, float(result.get("confidence") or 0)
+    digit_index = {char: charset.index(char) for char in "0123456789" if char in charset}
+    blank = 0 if charset[0] == "" else None
+    chars = []
+    scores = []
+    previous = None
+    for step in probs:
+        row = step
+        while isinstance(row, list) and row and isinstance(row[0], list):
+            row = row[0]
+        if not row:
+            continue
+        best_index = blank
+        best_score = row[blank] if blank is not None and blank < len(row) else -1
+        for index in digit_index.values():
+            if index < len(row) and row[index] > best_score:
+                best_score = row[index]
+                best_index = index
+        if best_index is None or best_index == previous:
+            previous = best_index
+            continue
+        previous = best_index
+        if best_index == blank:
+            continue
+        chars.append(charset[best_index])
+        scores.append(best_score)
+    confidence = sum(scores) / len(scores) if scores else 0.0
+    return "".join(chars), confidence
+
+
 def read_captcha(raw: bytes, length: int) -> str:
-    """Vote across two digit models. Screenshots are scaled back to captcha size first."""
+    """Read a numeric captcha with the beta model and keep the most confident exact-length result."""
+    blobs = []
     try:
-        base = _resample(raw, 80)
-    except Exception:
-        base = raw
-    votes = []
-    blobs = [base]
-    try:
-        blobs.append(_resample(base, 240))
+        if 36 <= Image.open(io.BytesIO(raw)).height <= 180:
+            blobs.append(raw)
     except Exception:
         pass
+    for height in (64, 96):
+        try:
+            blobs.append(_resample(raw, height))
+        except Exception:
+            pass
+    if not blobs:
+        blobs.append(raw)
+
+    engine = engines()
+    best = ("", -1.0)
     for blob in blobs:
-        for engine in engines():
-            try:
-                text = engine.classification(blob, png_fix=True)
-            except Exception:
-                text = ""
-            digits = "".join(ch for ch in str(text) if ch.isdigit())
-            if digits:
-                votes.append(digits)
-    exact = [item for item in votes if len(item) == length]
-    pool = exact or votes
-    if not pool:
-        return ""
-    return Counter(pool).most_common(1)[0][0]
+        try:
+            result = engine.classification(blob, png_fix=True, probability=True)
+            text, confidence = _digits_from_probability(result)
+        except Exception:
+            text, confidence = "", 0.0
+        if not text:
+            continue
+        exact = len(text) == length
+        best_exact = len(best[0]) == length
+        if exact and (not best_exact or confidence > best[1]):
+            best = (text, confidence)
+        elif not exact and not best_exact and confidence > best[1]:
+            best = (text, confidence)
+    return best[0]
 
 
 def _form_visible(page, portal) -> bool:
@@ -306,10 +389,28 @@ def _fill(page, selector, value):
     field.fill(value)
 
 
+def _launcher_page(context):
+    """The tab that is already showing this app, so login can navigate it in place."""
+    deadline = time.time() + 8
+    while True:
+        matches = []
+        for page in context.pages:
+            if page.is_closed():
+                continue
+            if ":8756" in (page.url or ""):
+                matches.append(page)
+        if matches:
+            return matches[-1]
+        if time.time() >= deadline:
+            break
+        time.sleep(0.25)
+    raise RuntimeError("找不到原本的清大入口頁面，請先打開 http://127.0.0.1:8756/ 再按一次")
+
+
 def _open_login(page, portal, log):
     if _form_visible(page, portal):
         return page
-    log(f"開啟{portal['name']}")
+    log(f"用原本的頁面前往{portal['name']}")
     page.goto(portal["entry"], wait_until="domcontentloaded", timeout=30000)
     page = portal["reach"](page, log) or page
     if _already_inside(page, portal):
@@ -382,8 +483,7 @@ def sign_in(context, portal_id: str, account: str, password: str, log) -> dict:
             bound.add(id(target))
         return target
 
-    blanks = [p for p in context.pages if not p.is_closed() and p.url in ("about:blank", "chrome://newtab/")]
-    page = use(blanks[0] if blanks else context.new_page())
+    page = use(_launcher_page(context))
 
     try:
         page = use(_open_login(page, portal, log))
@@ -456,7 +556,7 @@ def sign_in(context, portal_id: str, account: str, password: str, log) -> dict:
             page.bring_to_front()
             return {
                 "status": "needs_user",
-                "message": "已送出登入，但沒有回到系統頁面。請看開啟的 Chrome 視窗。",
+                "message": "已送出登入，但沒有回到系統頁面。請看這個頁面。",
                 "url": page.url,
             }
 
@@ -471,7 +571,7 @@ def sign_in(context, portal_id: str, account: str, password: str, log) -> dict:
         page.bring_to_front()
         return {
             "status": "needs_user",
-            "message": "驗證碼連續幾次都沒辨識成功。帳號密碼已填進開啟的視窗，請手動輸入驗證碼再按登入。",
+            "message": "驗證碼連續幾次都沒辨識成功。帳號密碼已填在這個頁面，請手動輸入驗證碼再按登入。",
             "url": page.url,
         }
     except Exception as exc:
@@ -483,36 +583,50 @@ def sign_in(context, portal_id: str, account: str, password: str, log) -> dict:
 
 
 class BrowserSession:
-    """One headed Chrome, reused so each portal stays open in its own tab."""
+    """The user's open Brave. Each portal is a new tab, not a new window."""
 
     def __init__(self):
         self.playwright = None
+        self.browser = None
         self.context = None
 
+    def _connected(self):
+        if self.context is None:
+            return False
+        try:
+            browser = self.context.browser
+            return browser is not None and browser.is_connected()
+        except Exception:
+            return False
+
+    def _reset(self):
+        self.context = None
+        self.browser = None
+
     def open(self):
-        if self.context is not None:
-            try:
-                _ = self.context.pages
-                return
-            except Exception:
-                self.context = None
+        if self._connected():
+            return
+        self._reset()
         if self.playwright is None:
             self.playwright = sync_playwright().start()
-        PROFILE_DIR.mkdir(exist_ok=True)
-        self.context = self.playwright.chromium.launch_persistent_context(
-            str(PROFILE_DIR),
-            channel="chrome",
-            headless=False,
-            no_viewport=True,
-            ignore_https_errors=True,
-            locale="zh-TW",
-            ignore_default_args=["--enable-automation"],
-            args=["--start-maximized", "--disable-blink-features=AutomationControlled"],
-        )
+        ensure_brave_tab_host()
+        self.browser = self.playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{DEBUG_PORT}")
+        if not self.browser.contexts:
+            raise RuntimeError("Brave 沒有可使用的視窗")
+        self.context = self.browser.contexts[0]
 
     def sign_in(self, portal_id, account, password, log):
-        self.open()
-        return sign_in(self.context, portal_id, account, password, log)
+        last = None
+        for attempt in range(2):
+            try:
+                self.open()
+                return sign_in(self.context, portal_id, account, password, log)
+            except Exception as exc:
+                last = exc
+                self._reset()
+                if attempt == 1 or "has been closed" not in str(exc):
+                    raise
+        raise last
 
 
 def check() -> int:
@@ -523,7 +637,7 @@ def check() -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=False,
-            channel="chrome",
+            executable_path=str(browser_executable()),
             ignore_default_args=["--enable-automation"],
             args=["--disable-blink-features=AutomationControlled"],
         )
