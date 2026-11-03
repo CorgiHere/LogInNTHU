@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F3F8FE">
+  <title>清大入口</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="nav">
+      <div class="nav-bar">
+        <button id="settings" type="button" aria-expanded="false" aria-controls="settings-panel">設定</button>
+      </div>
+      <h1>清大入口</h1>
+    </header>
+
+    <main>
+      <section id="setup" hidden>
+      <h2 class="group-label">在這支手機上使用</h2>
+      <div class="group setup">
+        <p class="step"><span>1</span>到 App Store 安裝免費的 Userscripts</p>
+        <p class="step"><span>2</span>到「設定 → Safari → 擴充功能」打開 Userscripts，並允許所有網站</p>
+        <a class="step" href="https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js"><span>3</span>安裝登入輔助。打開後點位址列的擴充圖示，再按安裝</a>
+        <p class="step"><span>4</span>回到這頁按「設定」填帳號，再點要進去的系統</p>
+      </div>
+      </section>
+      <p id="helper-state" class="footnote" hidden>登入輔助已啟用。帳密只留在這支手機的 Safari。</p>
+
+      <div id="settings-panel" hidden>
+        <h2 class="group-label" id="school-title">校務帳號 <span id="saved-school" class="saved">尚未儲存</span></h2>
+        <section class="group" aria-labelledby="school-title">
+          <label class="field">
+            <span>帳號</span>
+            <input id="account" name="account" type="text" autocomplete="section-school username" maxlength="42" spellcheck="false" placeholder="學號或員工編號">
+          </label>
+          <label class="field">
+            <span>密碼</span>
+            <span class="password-row">
+              <input id="password" name="password" type="password" autocomplete="section-school current-password" maxlength="64" placeholder="必填">
+              <button id="toggle-school" type="button">顯示</button>
+            </span>
+          </label>
+          <button id="clear-school" type="button" class="field action">清除校務帳密</button>
+        </section>
+        <p class="footnote">給校務資訊系統、elearn、eeclass。</p>
+
+        <h2 class="group-label" id="library-title">圖書館帳號 <span id="saved-library" class="saved">尚未儲存</span></h2>
+        <section class="group" aria-labelledby="library-title">
+          <label class="field">
+            <span>帳號</span>
+            <input id="library-account" name="library-account" type="text" autocomplete="section-library username" maxlength="42" spellcheck="false" placeholder="圖書館帳號">
+          </label>
+          <label class="field">
+            <span>密碼</span>
+            <span class="password-row">
+              <input id="library-password" name="library-password" type="password" autocomplete="section-library current-password" maxlength="64" placeholder="必填">
+              <button id="toggle-library" type="button">顯示</button>
+            </span>
+          </label>
+          <button id="clear-library" type="button" class="field action">清除圖書館帳密</button>
+        </section>
+        <p class="footnote">只給圖書館。</p>
+      </div>
+
+      <h2 class="group-label">系統</h2>
+      <section class="group portals" aria-label="選擇系統">
+        <a class="portal" data-portal="ccxp" href="https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/">
+          <span class="mark">務</span>
+          <span class="meta"><strong>校務資訊系統</strong><small>選課、成績、註冊</small></span>
+          <svg class="chevron" viewBox="0 0 8 13" aria-hidden="true"><path d="M1 1l6 5.5L1 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="portal" data-portal="elearn" href="https://elearn.nthu.edu.tw/">
+          <span class="mark">學</span>
+          <span class="meta"><strong>elearn 數位學習</strong><small>從首頁取得新的登入連線</small></span>
+          <svg class="chevron" viewBox="0 0 8 13" aria-hidden="true"><path d="M1 1l6 5.5L1 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="portal" data-portal="eeclass" href="https://eeclass.nthu.edu.tw/">
+          <span class="mark">課</span>
+          <span class="meta"><strong>eeclass</strong><small>數位學習平台</small></span>
+          <svg class="chevron" viewBox="0 0 8 13" aria-hidden="true"><path d="M1 1l6 5.5L1 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="portal" data-portal="library" href="https://idm.nthu.ust.edu.tw/sso/886UST_NTHU/oidc/login/?next=/openid/886UST_NTHU/authorize/%3Fclient_id%3D227897%26response_type%3Dcode%26redirect_uri%3Dhttps%3A//libsms.lib.nthu.edu.tw/openidcallback.aspx%26state%3DRWD%26scope%3Dopenid">
+          <span class="mark">書</span>
+          <span class="meta"><strong>圖書館</strong><small>使用圖書館帳號</small></span>
+          <svg class="chevron" viewBox="0 0 8 13" aria-hidden="true"><path d="M1 1l6 5.5L1 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </section>
+      <p class="footnote">點了之後會打開學校的登入頁，由這支手機辨識驗證碼並登入。</p>
+
+      <h2 class="group-label">狀態</h2>
+      <section class="group status-card" aria-live="polite">
+        <p id="status" class="status">選一個系統即可。</p>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
