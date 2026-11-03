@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.0.0
+// @version      1.1.0
+// @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
+// @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @description  在手機上用已存帳密登入清大系統，並辨識驗證碼
 // @match        https://corgihere.github.io/LogInNTHU/*
+// @match        https://corgihere.github.io/LogInNTHU/
 // @match        https://www.ccxp.nthu.edu.tw/ccxp/INQUIRE/*
 // @match        https://oauth.ccxp.nthu.edu.tw/*
 // @match        https://elearn.nthu.edu.tw/*
@@ -58,12 +61,14 @@
   };
 
   function save(key, value) {
-    GM_setValue(key, JSON.stringify(value));
+    const result = GM_setValue(key, JSON.stringify(value));
+    return Promise.resolve(result);
   }
 
-  function load(key) {
-    const raw = GM_getValue(key, "");
-    if (!raw) return null;
+  async function load(key) {
+    let raw = GM_getValue(key, "");
+    if (raw && typeof raw.then === "function") raw = await raw;
+    if (!raw || typeof raw !== "string") return null;
     try {
       return JSON.parse(raw);
     } catch (err) {
@@ -79,15 +84,17 @@
     if (host === "eeclass.nthu.edu.tw") return "eeclass";
     if (host === "idm.nthu.ust.edu.tw") return "library";
     if (host === "libsms.lib.nthu.edu.tw") return "library-done";
-    if (host === "corgihere.github.io") return "launcher";
+    if (host === "corgihere.github.io" && location.pathname.indexOf("/LogInNTHU") === 0) return "launcher";
     return "";
   }
 
   function hookAlert() {
-    const script = document.createElement("script");
-    script.textContent = "window.alert=function(msg){try{sessionStorage.setItem('" + ALERT + "',String(msg||''))}catch(e){}};";
-    document.documentElement.appendChild(script);
-    script.remove();
+    try {
+      const script = document.createElement("script");
+      script.textContent = "window.alert=function(msg){try{sessionStorage.setItem('" + ALERT + "',String(msg||''))}catch(e){}};";
+      document.documentElement.appendChild(script);
+      script.remove();
+    } catch (err) {}
   }
 
   function ready() {
@@ -133,8 +140,8 @@
     bar.textContent = text;
   }
 
-  function credsFor(portal) {
-    const creds = load(CREDS) || {};
+  function credsFor(portal, creds) {
+    creds = creds || {};
     if (portal === "library") {
       return { id: (creds.libraryAccount || "").trim(), secret: creds.libraryPassword || "" };
     }
@@ -155,10 +162,19 @@
   }
 
   function setField(el, value) {
-    el.focus();
+    if (!el) return;
     el.value = value;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      sleep(ms).then(() => {
+        throw new Error("timeout");
+      }),
+    ]);
   }
 
   function imageURL(img) {
@@ -247,14 +263,14 @@
         return;
       }
       toast("正在打開 elearn 登入");
-      const link = await waitFor("a[href*='auth/oauth2/login.php']", 20000);
+      const link = await waitFor("a[href*='auth/oauth2/login.php']", 6000);
       if (link) link.click();
-      else toast("找不到 elearn 登入連結");
+      else location.assign("https://elearn.nthu.edu.tw/auth/oauth2/login.php?id=5&wantsurl=/");
       return;
     }
     if (kind === "eeclass") {
       toast("正在打開 eeclass 登入");
-      const link = await waitFor("a[href*='oauthRedir']", 8000);
+      const link = await waitFor("a[href*='oauthRedir']", 5000);
       if (link) link.click();
       else location.assign(EECLASS_OAUTH);
     }
@@ -272,28 +288,29 @@
     if (formKind === "library" && job.portal !== "library") return;
 
     const form = FORMS[formKind];
+    toast("正在填入帳號");
     const captcha = await waitFor(form.captcha, 8000);
     if (!captcha) {
-      save(JOB, null);
+      await save(JOB, { until: 0 });
       toast("已進入系統");
       return;
     }
-    const creds = credsFor(job.portal);
+    const creds = credsFor(job.portal, await load(CREDS));
     if (!creds.id || !creds.secret) {
-      save(JOB, null);
+      await save(JOB, { until: 0 });
       toast("請先回清大入口填寫帳號");
       return;
     }
     const failure = errorKind();
     if (failure && failure !== "captcha") {
-      save(JOB, null);
+      await save(JOB, { until: 0 });
       toast(failure);
       return;
     }
     setField(qs(form.account), creds.id);
     setField(qs(form.password), creds.secret);
-    if ((job.refreshes || 0) >= 5 || (job.submits || 0) >= 3) {
-      save(JOB, null);
+    if ((job.refreshes || 0) >= 2 || (job.submits || 0) >= 3) {
+      await save(JOB, { until: 0 });
       captcha.focus();
       toast("驗證碼請手動輸入後按登入");
       return;
@@ -301,29 +318,29 @@
     const img = await waitFor(form.image, 8000);
     if (!img) {
       captcha.focus();
-      toast("找不到驗證碼圖片");
+      toast("找不到驗證碼圖片，請手動輸入");
       return;
     }
     toast("正在辨識驗證碼");
     let code = "";
     try {
-      code = await readCaptcha(img, form.length);
+      code = await withTimeout(readCaptcha(img, form.length), 8000);
     } catch (err) {
-      save(JOB, null);
+      await save(JOB, { until: 0 });
       captcha.focus();
-      toast("這支手機無法辨識驗證碼，請手動輸入");
+      toast("請手動輸入驗證碼後按登入");
       return;
     }
     if (code.length !== form.length) {
       job.refreshes = (job.refreshes || 0) + 1;
-      save(JOB, job);
+      await save(JOB, job);
       toast("換一張驗證碼");
       location.reload();
       return;
     }
     setField(captcha, code);
     job.submits = (job.submits || 0) + 1;
-    save(JOB, job);
+    await save(JOB, job);
     toast("第 " + job.submits + " 次登入，驗證碼 " + code);
     const button = qs(form.submit);
     if (button) button.click();
@@ -332,33 +349,53 @@
   function bindLauncher() {
     document.documentElement.dataset.nthuHelper = "1";
     document.dispatchEvent(new Event("nthu-helper"));
-    const read = () => {
-      save(CREDS, {
-        account: (qs("#account") && qs("#account").value || "").trim(),
-        password: (qs("#password") && qs("#password").value) || "",
-        libraryAccount: (qs("#library-account") && qs("#library-account").value || "").trim(),
-        libraryPassword: (qs("#library-password") && qs("#library-password").value) || "",
-      });
-    };
-    document.addEventListener("input", read, true);
+    const snapshot = () => ({
+      account: ((qs("#account") && qs("#account").value) || "").trim(),
+      password: (qs("#password") && qs("#password").value) || "",
+      libraryAccount: ((qs("#library-account") && qs("#library-account").value) || "").trim(),
+      libraryPassword: (qs("#library-password") && qs("#library-password").value) || "",
+    });
+    document.addEventListener("input", () => { save(CREDS, snapshot()); }, true);
     document.addEventListener("click", (event) => {
-      const link = event.target.closest && event.target.closest("[data-portal]");
-      if (!link) return;
-      read();
-      save(JOB, { portal: link.dataset.portal, until: Date.now() + 120000, submits: 0, refreshes: 0 });
+      const link = event.target.closest && event.target.closest("a[data-portal]");
+      if (!link || !link.href) return;
+      const portal = link.dataset.portal;
+      const creds = snapshot();
+      const picked = credsFor(portal, creds);
+      if (!picked.id || !picked.secret) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const href = link.href;
+      Promise.all([
+        save(CREDS, creds),
+        save(JOB, { portal: portal, until: Date.now() + 120000, submits: 0, refreshes: 0 }),
+      ]).then(() => sleep(500)).then(() => {
+        location.assign(href);
+      }).catch(() => {
+        location.assign(href);
+      });
     }, true);
-    read();
+    save(CREDS, snapshot());
   }
 
   if (hostKind() === "ccxp") hookAlert();
 
-  ready().then(() => {
-    if (hostKind() === "launcher") {
-      bindLauncher();
-      return;
+  ready().then(async () => {
+    try {
+      if (hostKind() === "launcher") {
+        bindLauncher();
+        return;
+      }
+      const job = await load(JOB);
+      if (!job || !job.until || job.until < Date.now()) {
+        if ((document.referrer || "").indexOf("corgihere.github.io") !== -1) {
+          toast("沒有讀到已存帳號，請回清大入口再點一次");
+        }
+        return;
+      }
+      await signIn(job);
+    } catch (err) {
+      toast("請手動輸入驗證碼後按登入");
     }
-    const job = load(JOB);
-    if (!job || !job.until || job.until < Date.now()) return;
-    signIn(job);
   });
 })();

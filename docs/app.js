@@ -99,9 +99,12 @@ for (const link of document.querySelectorAll(".portal")) {
     if (!creds.id || !creds.secret) {
       event.preventDefault();
       setSettingsOpen(true);
+      settingsPanel.scrollIntoView({ block: "start" });
       setStatus(library ? "請先填寫圖書館帳號和密碼。" : "請先填寫校務帳號和密碼。", "warn");
       (library ? libraryAccount : account).focus();
+      return;
     }
+    setStatus("正在前往…");
   });
 }
 
