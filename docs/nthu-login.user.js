@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         清大入口
 // @namespace    https://github.com/CorgiHere/LogInNTHU
-// @version      1.6.0
+// @version      1.7.0
 // @updateURL    https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @downloadURL  https://raw.githubusercontent.com/CorgiHere/LogInNTHU/main/docs/nthu-login.user.js
 // @description  手機自己輸入驗證碼，電腦會辨識驗證碼並登入
@@ -21,6 +21,7 @@
 // @grant        GM_xmlhttpRequest
 // @connect      cdn.jsdelivr.net
 // @connect      tessdata.projectnaptha.com
+// @connect      127.0.0.1
 // @inject-into  content
 // @run-at       document-start
 // ==/UserScript==
@@ -333,7 +334,41 @@
     }
   }
 
+  function gmPost(url, body) {
+    const details = {
+      method: "POST",
+      url: url,
+      data: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      timeout: 8000,
+    };
+    if (typeof GM !== "undefined" && GM && typeof GM.xmlHttpRequest === "function") {
+      return Promise.resolve(GM.xmlHttpRequest(details)).then((resp) => (resp && (resp.responseText || resp.response)) || "");
+    }
+    if (typeof GM_xmlhttpRequest === "function") {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest(Object.assign({}, details, {
+          onload: (resp) => resolve((resp && resp.responseText) || ""),
+          onerror: () => reject(new Error("xhr")),
+          ontimeout: () => reject(new Error("xhr")),
+        }));
+      });
+    }
+    return Promise.reject(new Error("no-xhr"));
+  }
+
+  async function localCode(img, length) {
+    const shot = await capture(img, 120);
+    if (!shot) throw new Error("image");
+    const parsed = JSON.parse(await gmPost("http://127.0.0.1:8756/api/ocr", { image: shot, length: length }));
+    return String((parsed && parsed.code) || "").replace(/\D/g, "");
+  }
+
   async function readCaptcha(img, length) {
+    try {
+      const local = await localCode(img, length);
+      if (local.length === length) return local;
+    } catch (err) {}
     const engine = await worker();
     const votes = [];
     for (const height of [160, 280]) {

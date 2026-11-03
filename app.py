@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Local portal picker. Credentials stay in the browser; this process only listens on localhost."""
 
+import base64
 import json
 import sys
 import threading
@@ -114,23 +115,56 @@ class Handler(BaseHTTPRequestHandler):
         }[name]
         self._send(200, body=file_path.read_bytes(), content_type=kind)
 
+    def _json(self, limit):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None
+        if length <= 0 or length > limit:
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+
+    def _ocr(self):
+        data = self._json(2_000_000)
+        if not isinstance(data, dict):
+            self._send(400, {"ok": False, "error": "資料不正確"})
+            return
+        try:
+            length = int(data.get("length"))
+        except (TypeError, ValueError):
+            length = 0
+        if length not in (4, 6):
+            self._send(400, {"ok": False, "error": "長度不對"})
+            return
+        image = str(data.get("image") or "")
+        if image.startswith("data:") and "," in image:
+            image = image.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(image)
+        except Exception:
+            self._send(400, {"ok": False, "error": "圖片不正確"})
+            return
+        if not raw or len(raw) > 1_500_000:
+            self._send(400, {"ok": False, "error": "圖片不正確"})
+            return
+        self._send(200, {"ok": True, "code": bot.read_captcha(raw, length)})
+
     def do_POST(self):
-        if urlparse(self.path).path != "/api/login":
+        path = urlparse(self.path).path
+        if path == "/api/ocr":
+            self._ocr()
+            return
+        if path != "/api/login":
             self._send(404, {"ok": False, "error": "找不到這個功能"})
             return
         if not self._origin_ok():
             self._send(403, {"ok": False, "error": "只接受這個網站自己送出的登入"})
             return
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = 0
-        if length <= 0 or length > 10000:
-            self._send(400, {"ok": False, "error": "資料不正確"})
-            return
-        try:
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        data = self._json(10000)
+        if not isinstance(data, dict):
             self._send(400, {"ok": False, "error": "資料不正確"})
             return
 
