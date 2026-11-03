@@ -127,7 +127,8 @@ function fillSetup() {
       { n: "3", text: "在 App Store 安裝免費的 Userscripts" },
       { n: "4", text: "到「設定 → Safari → 擴充功能」打開它，並允許所有網站" },
       { n: "5", text: "在 Safari 打開安裝連結，點擴充圖示後按安裝", href: SCRIPT_URL },
-      { n: "6", text: "之後都用 Safari 打開清大入口。登入狀態會留在 Safari" },
+      { n: "6", text: "點分享鈕，選「加入主畫面」。若有「以網頁 App 開啟」，請關掉" },
+      { n: "7", text: "之後都從主畫面的圖示打開。它會進 Safari，登入輔助才會運作" },
     ];
   } else if (isAndroid) {
     title.textContent = "Android 的 Chrome 不能裝輔助";
@@ -166,6 +167,9 @@ function fillSetup() {
     box.append(row);
   }
 }
+
+const homeScreen = document.querySelector("#home-screen");
+if (isIOS) homeScreen.hidden = false;
 
 function refreshHelper() {
   const on = document.documentElement.dataset.nthuHelper === "1";
